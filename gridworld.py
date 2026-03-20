@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import random
 from collections import deque
 from typing import cast
-import matplotlib.pyplot as plt
+import time
 
 
 # 0 = empty
@@ -21,22 +21,65 @@ trap =      "T"
 adversary = "A"
 wall =      "#"
 
-start_world = np.array(
-    [
-        ['#', 'G','#','#','#','#','#','#','#', '#'],
-        ['#', ' ',' ',' ','#',' ','#','T',' ', '#'],
-        ['#', ' ',' ',' ',' ',' ',' ',' ',' ', '#'],
-        ['#', '#','#','#','#',' ','#','#','#', '#'],
-        ['#', 'A',' ',' ',' ',' ',' ',' ',' ', '#'],
-        ['#', ' ',' ',' ',' ','#','#',' ','#', '#'],
-        ['#', '#','#','#',' ','#',' ',' ',' ', '#'],
-        ['#', ' ',' ',' ',' ','#',' ','T',' ', '#'],
-        ['#', 'S',' ','#',' ','#',' ',' ',' ', '#'],
-        ['#', '#','#','#','#','#','#','#','#', '#']
-    ]
-                
-)
+MAP1 = [
+"##########################",
+"#G   #   T   #       #   #",
+"# ### ### ### ##### ### ##",
+"#   #     #       #      #",
+"### ##### # ##### ###### #",
+"#   #   # #   A #      # #",
+"# ### # # ### ### #### # #",
+"#   # # #   #     #  # # #",
+"# ### # ### # ##### ## # #",
+"#     #     #   T #    # #",
+"##### ####### ### ###### #",
+"#     #     #     #      #",
+"# ### # ### ##### # ######",
+"# #   #   #     # #      #",
+"# # ##### ##### # ###### #",
+"# #     #     # #      # #",
+"# ##### ##### # ###### # #",
+"#     #     # #      # # #",
+"### # ##### # ###### # # #",
+"#   #     # #      # #   #",
+"# ##### # # ###### # #####",
+"#       # #      #       #",
+"###### ### ###### ###### #",
+"#S                 #     #",
+"##########################",
+]
 
+MAP_before = [
+  "############",
+  "#         T#",
+  "#    #     #",
+  "# G  #     #",    
+  "#    #     #",
+  "######   T #",
+  "# T        #",
+  "#     #### #",
+  "#   T #    #",
+  "#     # A  #",
+  "# S   #    #",              
+  "############",
+]
+
+MAP = [
+  "############",
+  "#         T#",
+  "#    #     #",
+  "# G  #     #",    
+  "#    #     #",
+  "######   T #",
+  "# T        #",
+  "#     #### #",
+  "#   T #    #",
+  "# A   #    #",
+  "#   S #    #",              
+  "############",
+]
+
+start_world = np.array([list(row) for row in MAP], dtype="<U1")
 
 
 class Action (Enum):
@@ -75,7 +118,6 @@ class Environment:
   game_state:GameState
 
   def __init__ (self):
-
     self.bit_dict:dict[str,int] = {}
     self.bit_dict[empty]     = 0b0000
     self.bit_dict[goal]      = 0b0001
@@ -105,6 +147,12 @@ class Environment:
       arr[p+3] = 1 if cell & self.bit_dict[wall] else 0
     return arr;
   
+  def display_map (self):
+    display:np.ndarray = self.world.copy()
+    display[self.agent_position[0], self.agent_position[1]] = "X"
+    print("\033[H")  # reset cursor
+    print("\n".join(" ".join(row) for row in display))
+
   def create_local_observation (self) -> np.ndarray:
     # just a demonstration of how much easier it is to do things if you know what you'r doing.
     # I had:
@@ -242,9 +290,12 @@ class Agent:
     self.memory:deque[MemoryItem] = deque(maxlen=50_000)
     self.optimizer:torch.optim.Optimizer = torch.optim.Adam(self.online_network.parameters(), lr=self.learning_rate)
 
-  def explore (self, episodes:int=100):
+  def explore (self, episodes:int=100, show_off:bool=False):
     self.rewards = 0
     self.scores:dict[int,int] = {}
+    if show_off:
+      print("\033[2J")  # clear screen
+
     for episode in range (episodes):
       self.environment = Environment()
       self.start_position = self.environment.agent_start
@@ -264,6 +315,9 @@ class Agent:
         self.remember (self.environment.local_observation, state_before, act, reward, state_after, done, next_actions);
         self.rewards += reward
         self.total_steps += 1
+        if show_off:
+          self.environment.display_map()
+          time.sleep(0.5)
 
       if episode % 100 == 0:
           print (f"Episode {episode} complete. Total reward: {self.rewards}")
@@ -302,6 +356,25 @@ class Agent:
           action = list(Action)[best_action_index]
       
       return action
+  
+  def save(self, path: str):
+    torch.save({
+        "online_state_dict": self.online_network.state_dict(),
+        "target_state_dict": self.target_network.state_dict(),
+        "optimizer_state_dict": self.optimizer.state_dict(),
+        "epsilon": self.epsilon,
+        "total_steps": self.total_steps,
+    }, path)
+
+  def load(self, path: str):
+    checkpoint = torch.load(path)
+
+    self.online_network.load_state_dict(checkpoint["online_state_dict"])
+    self.target_network.load_state_dict(checkpoint["target_state_dict"])
+    self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    self.epsilon = checkpoint["epsilon"]
+    self.total_steps = checkpoint["total_steps"]    
 
   def encode_state (self) -> np.ndarray:
     assert self.environment is not None
@@ -389,8 +462,19 @@ def show_training_stats(agent:Agent):
   plt.savefig("loss.png", dpi=150)
   plt.close()
 
+def train():
+  agent:Agent = Agent()
+  agent.explore(episodes=5000)
+  show_training_stats(agent)
+  agent.save("./model/dqn_gridworld.pth")
 
-agent:Agent = Agent()
-agent.explore(episodes=5000)
-show_training_stats(agent)
+def show_off():
+  agent:Agent = Agent()
+  agent.load("./model/dqn_gridworld.pth")
+  agent.explore(episodes=1, show_off=True)  
 
+train()
+
+#while True:
+#  show_off()
+#  time.sleep(3)
